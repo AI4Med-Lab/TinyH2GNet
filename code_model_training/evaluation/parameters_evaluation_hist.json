@@ -1,0 +1,19 @@
+{
+  "dataset_name": "her2",
+  "model": "VGG",
+  "learning_rate": 0.0001,
+  "model_directory": "/home/puneet/mk/code_model_training/modelResults/her2_VGG_false_new_data_split_patients_wise/result_2026-02-15_22-27-05",
+  "dataset_path": "/home/puneet/mk/data/her2st_dataset_RGB/224",
+  "genes": "/home/puneet/mk/code_model_training/gene_outputs",
+  "hvg20": "/home/puneet/mk/code_dataprocessing/hvg/hvg_lists/her2_hvg_top_20.csv",
+  "hvg50": "/home/puneet/mk/code_dataprocessing/hvg/hvg_lists/her2_hvg_top_50.csv",
+  "disease_gene_csv": "/home/puneet/mk/code_model_training/evaluation/geneAnalysisData/bio_marker_gene.csv",
+  "embed_dim": 512,
+  "phi":-40.85,
+  "nhead": 8,
+  "quantize": true,
+  "dim_feedforward": 1024,
+  "batch_size": 128,
+  "device": "cuda",
+  "scale_factor": 1000000
+}

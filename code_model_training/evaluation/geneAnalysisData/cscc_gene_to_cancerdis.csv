@@ -1,0 +1,7 @@
+,Disease,Gene,matched_keyword
+9,DICER1-related tumor predisposition,['DICER1'],tumor
+45,gastric cancer,['KLF6'],cancer
+47,global developmental delay - lung cysts - overgrowth - Wilms tumor syndrome,['DICER1'],tumor
+48,"goiter, multinodular 1, with or without Sertoli-Leydig cell tumors",['DICER1'],tumor
+79,peeling skin syndrome 6,['FLG2'],skin
+84,"prostate cancer, hereditary",['KLF6'],cancer

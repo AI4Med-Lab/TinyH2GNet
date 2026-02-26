@@ -1,0 +1,12 @@
+,Disease,Gene,matched_keyword
+125,colorectal cancer,['PTPRJ'],cancer
+126,"colorectal cancer, hereditary nonpolyposis, type 6",['TGFBR2'],cancer
+168,esophageal cancer,['TGFBR2'],cancer
+170,familial pancreatic carcinoma,['KRAS'],carcinoma
+174,gastric cancer,['KRAS'],cancer
+175,gastrointestinal stromal tumor,['SDHB'],tumor
+186,hereditary breast carcinoma,['KRAS'],breast
+232,lung cancer,['KRAS'],cancer
+303,pigmentation defects-palmoplantar keratoderma-skin carcinoma syndrome,['SASH1'],skin
+342,skeletal overgrowth-craniofacial dysmorphism-hyperelastic skin-white matter lesions syndrome,['PDGFRB'],skin
+357,urinary bladder cancer,['KRAS'],cancer

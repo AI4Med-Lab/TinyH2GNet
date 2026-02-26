@@ -1,0 +1,17 @@
+baselines/
+code_model_training/log_outs/
+code_model_training/modelResults/
+code_model_training/modelWts/
+data/
+output/
+
+**/__pycache__/
+
+**/.ipynb_checkpoints/
+
+**.ckpt
+
+commands.txt
+model_comparison_ttest_results.csv
+paths_to_results.txt
+test_file.ipynb

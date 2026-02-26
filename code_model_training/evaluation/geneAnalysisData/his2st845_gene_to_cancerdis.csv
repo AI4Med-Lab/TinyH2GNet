@@ -1,0 +1,10 @@
+,Disease,Gene,matched_keyword
+114,"basal cell carcinoma, susceptibility to, 1",['SMO'],basal cell
+171,epidermolysis bullosa with congenital localized absence of skin and deformity of nails,['COL7A1'],skin
+179,esophageal cancer,['WWOX'],cancer
+193,gastric cancer,['ERBB2'],cancer
+209,hereditary breast carcinoma,['ESR1'],breast
+246,lung cancer,['ERBB2'],cancer
+304,ovarian cancer,['ERBB2'],cancer
+315,primary ciliary dyskinesia 12,['RSPH9'],skin
+316,primary ciliary dyskinesia 22,['ZMYND10'],skin
