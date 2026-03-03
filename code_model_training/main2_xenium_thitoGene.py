@@ -1,6 +1,6 @@
 import sys
-sys.path.append('/home/puneet/mk/code_model_training/models')
-sys.path.append('/home/puneet/mk/code_model_training/utils')
+sys.path.append('/code_model_training/models')
+sys.path.append('/code_model_training/utils')
 
 import warnings
 warnings.filterwarnings("ignore")
@@ -35,11 +35,9 @@ from utils.thiToGene import THItoGeneXeniumDataset
 from compute_metrics import compute_metrics, spearmanrr
 from setup_logger import setup_logging 
 from set_deterministic_seed import set_deterministic_seed
-from models import STNet, EfficientNet, EfficientNetB4GeneRegressor, Custom_VGG16, HisToGene, TCGN, EfficientNet_GeneCaptionContrastive, THItoGeneModel
+from models import STNet, EfficientNet, Custom_VGG16, HisToGene, TCGN, THItoGeneModel
 from torch.utils.data import ConcatDataset
 from proposedModels import ImageGeneCrossTransformer
-from sklearn.model_selection import KFold
-from proposedModels2 import ImageToGeneTransformer
 from model_eff_net_versions import EfficientNetTinyStudent
 
 def main():
@@ -169,101 +167,6 @@ def main():
             # Instantiate the model
             model = TCGN(**tcgn_kwargs)
             logger.info(f"TCGN initialized with {sum(p.numel() for p in model.parameters() if p.requires_grad):,} trainable parameters.")
-
-        elif params["model"] == "EfficientNet_GeneCaptionContrastive":
-            logger.info("Initializing EfficientNet Gene Caption + Contrastive model...")
-
-            model = EfficientNet_GeneCaptionContrastive(
-                num_genes=num_genes,
-                pretrained=params.get("pretrained", True),
-                contrastive_weight=params.get("contrastive_weight", 0.1),
-                temperature=params.get("temperature", 0.07)
-            )
-
-        elif params["model"] == "ImageGeneCrossTransformer":
-            # --- Get model hyperparameters ---
-            embed_dim = params.get("embed_dim", 512)
-            nhead = params.get("nhead", 4)
-            dim_feedforward = params.get("dim_feedforward", 1024)
-            dropout = params.get("dropout", 0.1)
-            pretrained = params.get("pretrained", False)
-            H = params.get("image_height", 224)
-            W = params.get("image_width", 224)
-            image_channels = params.get("image_channels", 3)
-
-            # --- Logging configuration ---
-            logger.info("Initializing ImageGeneCrossTransformer with:")
-            logger.info(f"- Image size: {H}x{W}")
-            logger.info(f"- Embedding dimension (d_model): {embed_dim}")
-            logger.info(f"- Attention heads: {nhead}")
-            logger.info(f"- Feedforward dim: {dim_feedforward}")
-            logger.info(f"- Dropout: {dropout}")
-            logger.info(f"- Pretrained EfficientNet: {pretrained}")
-            logger.info(f"- Number of genes: {num_genes}")
-            logger.info(f"- Image channels: {image_channels}")
-
-            # --- Model initialization ---
-            model = ImageGeneCrossTransformer(
-                num_genes=num_genes,
-                d_model=embed_dim,
-                nhead=nhead,
-                dim_feedforward=dim_feedforward,
-                dropout=dropout,
-                pretrained=pretrained,
-            )
-
-        elif params["model"] == "ImageToGeneTransformer":
-            # --- Get model hyperparameters ---
-            embed_dim = params.get("embed_dim", 768)
-            nhead = params.get("nhead", 8)
-            encoder_layers = params.get("encoder_layers", 6)
-            decoder_layers = params.get("decoder_layers", 4)
-            dim_feedforward = params.get("dim_feedforward", 2048)
-            dropout = params.get("dropout", 0.1)
-            patch_size = params.get("patch_size", 16)
-            activation = params.get("activation", "relu")
-            layer_norm_eps = params.get("layer_norm_eps", 1e-5)
-            batch_first = params.get("batch_first", True)
-            freeze_encoder = params.get("freeze_encoder", False)
-            H = params.get("image_height", 128)
-            W = params.get("image_width", 128)
-            image_channels = params.get("image_channels", 3)
-
-            # --- Logging configuration ---
-            logger.info("Initializing ImageToGeneTransformer with:")
-            logger.info(f"- Image size: {H}x{W}")
-            logger.info(f"- Embedding dimension (d_model): {embed_dim}")
-            logger.info(f"- Encoder layers: {encoder_layers}")
-            logger.info(f"- Decoder layers: {decoder_layers}")
-            logger.info(f"- Attention heads: {nhead}")
-            logger.info(f"- Feedforward dim: {dim_feedforward}")
-            logger.info(f"- Dropout: {dropout}")
-            logger.info(f"- Patch size: {patch_size}")
-            logger.info(f"- Activation: {activation}")
-            logger.info(f"- Layer norm eps: {layer_norm_eps}")
-            logger.info(f"- Batch first: {batch_first}")
-            logger.info(f"- Freeze encoder: {freeze_encoder}")
-            logger.info(f"- Number of genes: {num_genes}")
-            logger.info(f"- Image channels: {image_channels}")
-
-            # --- Model initialization ---
-            model = ImageToGeneTransformer(
-                H=H,
-                W=W,
-                C=image_channels,
-                num_genes=num_genes,
-                d_model=embed_dim,
-                encoder_layers=encoder_layers,
-                decoder_layers=decoder_layers,
-                nhead=nhead,
-                dim_feedforward=dim_feedforward,
-                dropout=dropout,
-                activation=activation,
-                layer_norm_eps=layer_norm_eps,
-                batch_first=batch_first,
-                freeze_encoder=freeze_encoder,
-                patch_size=patch_size,
-            )
         
         elif params["model"] == "THItoGene":
             logger.info("Initializing THItoGene model for gene expression prediction.")
@@ -341,13 +244,6 @@ def main():
                 if not torch.isfinite(y_true).all():
                     logger.warning(f"[Epoch {epoch+1} | Batch {batch_idx}] NaN/Inf detected in ground truth. Skipping batch.")
                     continue
-
-
-                if params["model"] in ["ImageGeneCrossTransformer", "ImageToGeneTransformer", "EfficientNet_GeneCaptionContrastive"]:
-                    y_pred, contrastive_loss = model(images, gene_values=y_true)  # Pass gene values during training
-                else:
-                    y_pred = model(images)                 # shape: (B, num_genes)
-
 
                 y_pred = torch.where(y_pred < 0, torch.tensor(0.0, device=y_pred.device), y_pred)
                 
@@ -473,11 +369,7 @@ def main():
                     images = images.to(device)                          # shape: (B, 3, 224, 224)
                     y_true = targets.to(device)                         # shape: (B, num_genes)
 
-                    # --- Forward pass through model ---
-                    if params["model"] in ["ImageGeneCrossTransformer", "ImageToGeneTransformer", "EfficientNet_GeneCaptionContrastive"]:
-                        y_pred,_ = model(images)
-                    else:
-                        y_pred = model(images) 
+                    y_pred = model(images) 
                         
                     assert torch.is_tensor(y_pred), f"y_pred is not tensor, got {type(y_pred)}"
    
@@ -512,30 +404,6 @@ def main():
 
                 val_y_true = np.vstack(val_y_true) if len(val_y_true) > 0 else np.array([])
                 val_y_pred = np.vstack(val_y_pred) if len(val_y_pred) > 0 else np.array([])
-
-                # Save scatter of first up-to-25 samples (if present)
-                if val_y_true.size:
-                    n_display = min(25, val_y_true.shape[0])
-                    val_y_true_25 = val_y_true[:n_display, :]
-                    val_y_pred_25 = val_y_pred[:n_display, :]
-
-                    # Create grid (square)
-                    grid_sz = int(np.ceil(np.sqrt(n_display)))
-                    fig, axes = plt.subplots(nrows=grid_sz, ncols=grid_sz, figsize=(4 * grid_sz, 4 * grid_sz))
-                    axes = np.atleast_2d(axes)
-                    for idx in range(n_display):
-                        r = idx // grid_sz
-                        c = idx % grid_sz
-                        axes[r, c].scatter(val_y_true_25[idx], val_y_pred_25[idx], alpha=0.6)
-                        min_val = min(val_y_true_25[idx].min(), val_y_pred_25[idx].min())
-                        max_val = max(val_y_true_25[idx].max(), val_y_pred_25[idx].max())
-                        axes[r, c].plot([min_val, max_val], [min_val, max_val], linestyle='--', color='red')
-                        axes[r, c].set_title(f"Sample {idx+1}")
-                    plt.tight_layout()
-                    scatter_save_path = os.path.join(model_save_dir, f"fold_{fold_idx+1}", f"scatter_plot_25_samples_epoch_{epoch+1}.png")
-                    os.makedirs(os.path.dirname(scatter_save_path), exist_ok=True)
-                    plt.savefig(scatter_save_path)
-                    plt.close(fig)
 
                 results_val = compute_metrics(val_y_true, val_y_pred) if val_y_true.size else {}
 
@@ -654,24 +522,8 @@ def main():
     raw_images = single_dataset.image
     raw_genes = single_dataset.gene_data
     
-    # results_path_fold = os.path.join(params["result_path"], "result_vit_2025-11-22_23-27-42")  
-    # # find all existing fold_* folders
-    # completed_folds = {
-    #     int(name.split("_")[1]) - 1
-    #     for name in os.listdir(results_path_fold)
-    #     if name.startswith("fold_")
-    # }
-    
-    # start_fold = 1
     # --- K-Fold Loop ---
     for fold_idx, (train_idx, val_idx) in enumerate(kf.split(range(len(single_dataset)))):
-        # if fold_idx in completed_folds:
-        #     logger.info(f"Skipping Fold {fold_idx+1} (already completed)")
-        #     continue
-        # if fold_idx < start_fold:
-        #     logger.info(f"Skipping Fold {fold_idx+1} (already completed)")
-        #     continue
-        
     
         logger.info(f"\n===== Starting Fold {fold_idx+1} =====")
 

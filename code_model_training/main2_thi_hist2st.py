@@ -1,6 +1,6 @@
 import sys
-sys.path.append('/home/puneet/mk/code_model_training/models')
-sys.path.append('/home/puneet/mk/code_model_training/utils')
+sys.path.append('/code_model_training/models')
+sys.path.append('/code_model_training/utils')
 
 import warnings
 warnings.filterwarnings("ignore")
@@ -27,19 +27,16 @@ import pandas as pd
 from scipy import sparse
 from scipy.stats import pearsonr
 from torch.nn import DataParallel
-from utils.dataPrep import PatchDataset
 from utils.thiToGene import THItoGeneH5Dataset, THItoGeneHER2Dataset
 from compute_metrics import compute_metrics, spearmanrr
 from setup_logger import setup_logging
 from set_deterministic_seed import set_deterministic_seed
-from models import STNet, EfficientNet, EfficientNetB4GeneRegressor, Custom_VGG16, HisToGene, TCGN, EfficientNet_GeneCaptionContrastive, GEMResNet18, GEMEfficientNetB0, MobileNetV2Regressor, HierarchicalDenseNet
-from models import TinySTNet, RefinedTinySTNet, TinyEfficientNet, RefinedTinyEfficientNet, THItoGeneModel
+from models import STNet, EfficientNet, Custom_VGG16, HisToGene, TCGN,THItoGeneModel
 from model_eff_net_versions import EfficientNetTinyStudent
 from torch.utils.data import ConcatDataset
-from proposedModels import ImageGeneCrossTransformer
 from sklearn.model_selection import KFold, GroupKFold
-from proposedModels2 import ImageToGeneTransformer
-from loss_gene_wise import gene_weighted_mse_loss, kd_loss, distil_loss
+
+
 
 def main():
      
@@ -125,81 +122,13 @@ def main():
             pretrained = params.get("pretrained", False)
             model = EfficientNet(num_genes=num_genes, pretrained=pretrained) 
             
-        elif params["model"] == "Resnet_GEM": 
-            pretrained = params.get("pretrained", True)
-            model = GEMResNet18(num_genes=num_genes, pretrained=pretrained)
-        
-        elif params["model"] == "GEMEfficientNetB0": 
-            pretrained = params.get("pretrained", True)
-            model = GEMEfficientNetB0(num_genes=num_genes, pretrained=pretrained)
-            
-        elif params["model"] == "MobileNet":
-            pretrained = params.get("pretrained", True)
-            model = MobileNetV2Regressor(num_genes=num_genes, pretrained=pretrained)
-            
-        elif params["model"] == "TinySTNet":
-            pretrained = params.get("pretrained", True)
-            model = TinySTNet(num_genes=num_genes)  # no pretrained weights
-
-            if params.get("use_kd", False):  # if distillation is enabled
-                # Load the teacher model
-                teacher = STNet(num_genes=num_genes, pretrained=True)
-                # teacher.eval()
-                # for p in teacher.parameters():
-                #     p.requires_grad = False  # freeze teacher
-
-        elif params["model"] == "ReTinySTNet":
-            pretrained = params.get("pretrained", True)
-            model = RefinedTinySTNet(num_genes=num_genes)  # no pretrained weights
-
-            if params.get("use_kd", False):  # if distillation is enabled
-                # Load the teacher model
-                teacher = STNet(num_genes=num_genes, pretrained=True)
-        
-        elif params["model"] == "TinyEffNet":
-            pretrained = params.get("pretrained", True)
-            model = TinyEfficientNet(num_genes=num_genes)
-
-            if params.get("use_kd", False):
-                teacher = EfficientNet(num_genes=num_genes, pretrained=True)
-                
-        
-        elif params["model"] == "RefinedTinyEfficientNet":
-            logger.info(f"RefinedTinyEfficientNet model for gene expression prediction.")
-            pretrained = params.get("pretrained", True)
-            model = RefinedTinyEfficientNet(num_genes=num_genes)
-
-            if params.get("use_kd", False):
-                teacher = EfficientNet(num_genes=num_genes, pretrained=True)
-        
-        # elif params["model"] == "EfficientNetTinyStudent":
-        #     logger.info("EfficientNetTinyStudent (compound-scaled) for gene expression prediction.")
-
-        #     pretrained = params.get("pretrained", True)
-        #     phi = params.get("phi", -7.0)   # default phi if not provided
-        #     print("phi:", phi)
-        #     use_kd = params.get("use_kd", False)
-
-        #     model = EfficientNetTinyStudent(num_genes=num_genes, phi=phi)
-
-        #     teacher = None
-        #     if use_kd:
-        #         logger.info("Using EfficientNet-B0 teacher for knowledge distillation.")
-        #         teacher = EfficientNet(num_genes=num_genes, pretrained=pretrained)
-            
-        #     logger.info(f"EfficientNetTinyStudent initialized with {sum(p.numel() for p in model.parameters() if p.requires_grad):,} trainable parameters.")
-        
         elif params["model"] == "EfficientNetTinyStudent":
             logger.info("EfficientNetTinyStudent (tiny) for gene expression prediction.")
             phi = params.get("phi", -7.0)
             model = EfficientNetTinyStudent(num_genes=num_genes, phi=phi)
             
             logger.info(f"EfficientNetTinyStudent initialized with {sum(p.numel() for p in model.parameters() if p.requires_grad):,} trainable parameters.")
-        
-        elif params["model"] == "HierarchicalDenseNet": 
-            pretrained = params.get("pretrained", True)
-            model = HierarchicalDenseNet(num_genes=num_genes, pretrained=pretrained, shared_backbone=False)
-            
+         
         elif params["model"] == "HisToGene":
             model = HisToGene(patch_size=16, n_layers= 8, n_genes=num_genes)
             
@@ -235,113 +164,6 @@ def main():
             model = TCGN(num_classes=num_genes)
 
             logger.info(f"TCGN initialized with {sum(p.numel() for p in model.parameters() if p.requires_grad):,} trainable parameters.")
-
-        elif params["model"] == "EfficientNet_GeneCaptionContrastive":
-            logger.info("Initializing EfficientNet Gene Caption + Contrastive model...")
-
-            model = EfficientNet_GeneCaptionContrastive(
-                num_genes=num_genes,
-                pretrained=params.get("pretrained", True),
-                contrastive_weight=params.get("contrastive_weight", 0.02),
-                temperature=params.get("temperature", 0.07)
-            )
-            
-        elif params["model"] == "ImageGeneCrossTransformer":
-            # --- Get model hyperparameters ---
-            embed_dim = params.get("embed_dim", 512)
-            nhead = params.get("nhead", 4)
-            dim_feedforward = params.get("dim_feedforward", 1024)
-            dropout = params.get("dropout", 0.1)
-            pretrained = params.get("pretrained", False)
-            H = params.get("image_height", 224)
-            W = params.get("image_width", 224)
-            image_channels = params.get("image_channels", 3)
-
-            # --- Logging configuration ---
-            logger.info("Initializing ImageGeneCrossTransformer with:")
-            logger.info(f"- Image size: {H}x{W}")
-            logger.info(f"- Embedding dimension (d_model): {embed_dim}")
-            logger.info(f"- Attention heads: {nhead}")
-            logger.info(f"- Feedforward dim: {dim_feedforward}")
-            logger.info(f"- Dropout: {dropout}")
-            logger.info(f"- Pretrained EfficientNet: {pretrained}")
-            logger.info(f"- Number of genes: {num_genes}")
-            logger.info(f"- Image channels: {image_channels}")
-
-            # --- Model initialization ---
-            model = ImageGeneCrossTransformer(
-                num_genes=num_genes,
-                d_model=embed_dim,
-                nhead=nhead,
-                dim_feedforward=dim_feedforward,
-                dropout=dropout,
-                pretrained=pretrained,
-            )
-
-        elif params["model"] == "ImageToGeneTransformer":
-            # --- Get model hyperparameters ---
-            embed_dim = params.get("embed_dim", 768)
-            nhead = params.get("nhead", 8)
-            encoder_layers = params.get("encoder_layers", 6)
-            decoder_layers = params.get("decoder_layers", 4)
-            dim_feedforward = params.get("dim_feedforward", 2048)
-            dropout = params.get("dropout", 0.1)
-            patch_size = params.get("patch_size", 16)
-            activation = params.get("activation", "relu")
-            layer_norm_eps = params.get("layer_norm_eps", 1e-5)
-            batch_first = params.get("batch_first", True)
-            freeze_encoder = params.get("freeze_encoder", False)
-            H = params.get("image_height", 128)
-            W = params.get("image_width", 128)
-            image_channels = params.get("image_channels", 3)
-
-            # --- Logging configuration ---
-            logger.info("Initializing ImageToGeneTransformer with:")
-            logger.info(f"- Image size: {H}x{W}")
-            logger.info(f"- Embedding dimension (d_model): {embed_dim}")
-            logger.info(f"- Encoder layers: {encoder_layers}")
-            logger.info(f"- Decoder layers: {decoder_layers}")
-            logger.info(f"- Attention heads: {nhead}")
-            logger.info(f"- Feedforward dim: {dim_feedforward}")
-            logger.info(f"- Dropout: {dropout}")
-            logger.info(f"- Patch size: {patch_size}")
-            logger.info(f"- Activation: {activation}")
-            logger.info(f"- Layer norm eps: {layer_norm_eps}")
-            logger.info(f"- Batch first: {batch_first}")
-            logger.info(f"- Freeze encoder: {freeze_encoder}")
-            logger.info(f"- Number of genes: {num_genes}")
-            logger.info(f"- Image channels: {image_channels}")
-
-            # --- Model initialization ---
-            model = ImageToGeneTransformer(
-                H=H,
-                W=W,
-                C=image_channels,
-                num_genes=num_genes,
-                d_model=embed_dim,
-                encoder_layers=encoder_layers,
-                decoder_layers=decoder_layers,
-                nhead=nhead,
-                dim_feedforward=dim_feedforward,
-                dropout=dropout,
-                activation=activation,
-                layer_norm_eps=layer_norm_eps,
-                batch_first=batch_first,
-                freeze_encoder=freeze_encoder,
-                patch_size=patch_size,
-            )
-
-
-        elif params["model"] ==  "autoencoder":
-            logger.info(f"AutoEncoder model for gene expression prediction.")
-            unet = SMPDenseNet121UNet()
-            unet.load_state_dict(torch.load("/home/sukrit/AmitCode/code/modelResults/result_vit_2025-11-29_02-16-04/fold_2/best_model.pth"))
-
-            # Extract encoder
-            encoder = unet.model.encoder
-
-            # Create gene prediction model
-            model = GenePredictorFromDenseNetUNet(encoder, n_genes=num_genes)
 
         elif params["model"] == "THItoGene":
             logger.info("Initializing THItoGene model for gene expression prediction.")
@@ -390,12 +212,6 @@ def main():
         patience_counter = 0
         patience = params.get('early_stopping_patience', 15)
         
-        if params.get("use_kd", False):
-            teacher = teacher.to(device)
-            teacher.eval()
-            for p in teacher.parameters():
-                p.requires_grad = False
-
         # Training loop
         for epoch in range(epochs):
             model.train()
@@ -418,14 +234,6 @@ def main():
                 # Forward
                 y_pred = model(patches, centers, adj)          # (1, N_spots, num_genes) or (N_spots, num_genes)
 
-                # ---- Remove batch dim if present (batch_size=1) ----
-                # if patches.dim() == 5:
-                #     patches = patches.squeeze(0)
-                #     positions = positions.squeeze(0)
-                #     adj = adj.squeeze(0)
-                #     y_true = y_true.squeeze(0)
-                
-                    # Make shapes compatible
                 if y_pred.dim() == 2:          # (N, G)
                     y_pred = y_pred.unsqueeze(0)
 
@@ -472,32 +280,7 @@ def main():
                 if loss_fn_name == "mse" or loss_fn_name == "MSELoss":
                     mse_criterion = torch.nn.MSELoss()
                     mse_loss = mse_criterion(y_pred, y_true)
-                    # if contrastive_loss is not None:
-                    #     loss = mse_loss + model.contrastive_weight * contrastive_loss
-                    # else:
                     loss = mse_loss
-                    
-                elif loss_fn_name == "kd_loss":
-                    loss = kd_loss(y_pred, teacher_pred, y_true)
-                    
-                elif loss_fn_name == "dist_loss":
-                    loss = distil_loss(y_pred, teacher_pred, y_true)
-                elif loss_fn_name =="pearson_loss":
-                    
-                    def pearson_loss(pred, target):
-                        pred = pred - pred.mean(dim=1, keepdim=True)
-                        target = target - target.mean(dim=1, keepdim=True)
-                        numerator = (pred * target).sum(dim=1)
-                        denominator = pred.norm(dim=1) * target.norm(dim=1) + 1e-8
-                        loss = 1 - numerator / denominator
-                        return loss.mean()
-                    
-                    mse = F.mse_loss(y_pred, y_true)
-                    loss = 0.5 * pearson_loss(y_pred, y_true) + 0.5 * mse
-
-                elif loss_fn_name == "gene_weighted_loss":
-                    loss = gene_weighted_mse_loss(y_pred, y_true)
-                                  
                 else:
                     logger.error("Loss Function not defined!!!")
                     raise ValueError("Loss Function not defined")
@@ -610,46 +393,10 @@ def main():
                         y_pred = y_pred.unsqueeze(0)
                     y_pred = torch.where(y_pred < 0, torch.tensor(0.0, device=y_pred.device), y_pred)
 
-                    if params.get("use_kd", False):
-                        teacher = STNet(num_genes=num_genes, pretrained=True).to(device)
-                        teacher.eval()
-
                     loss_fn_name = params.get("loss_fn", "")
                     if loss_fn_name == "mse" or loss_fn_name == "MSELoss":
                         mse_criterion = torch.nn.MSELoss()
                         loss = mse_criterion(y_pred, y_true)
-                        
-                    elif loss_fn_name == "kd_loss":
-                        if "teacher" not in globals() and teacher is None:
-                            raise RuntimeError("Teacher model is not loaded for KD evaluation.")
-                        
-                        teacher_pred = teacher(images)
-
-                        loss = kd_loss(y_pred, teacher_pred, y_true)
-                    
-                    elif loss_fn_name == "dist_loss":
-                        if "teacher" not in globals() and teacher is None:
-                            raise RuntimeError("Teacher model is not loaded for KD evaluation.")
-                        
-                        teacher_pred = teacher(images)
-                        
-                        loss = distil_loss(y_pred, teacher_pred, y_true)    
-                    
-                    elif loss_fn_name =="pearson_loss":
-                    
-                        def pearson_loss(pred, target):
-                            pred = pred - pred.mean(dim=1, keepdim=True)
-                            target = target - target.mean(dim=1, keepdim=True)
-                            numerator = (pred * target).sum(dim=1)
-                            denominator = pred.norm(dim=1) * target.norm(dim=1) + 1e-8
-                            loss = 1 - numerator / denominator
-                            return loss.mean()
-                        
-                        mse = F.mse_loss(y_pred, y_true)
-                        loss = 0.5 * pearson_loss(y_pred, y_true) + 0.5 * mse
-                        
-                    elif loss_fn_name == "gene_weighted_loss":
-                        loss = gene_weighted_mse_loss(y_pred, y_true)
           
                     else:
                         logger.error("Loss Function not defined!!!")
@@ -694,31 +441,6 @@ def main():
                 # ---- Epoch-level aggregation (concat, not vstack!) ----
                 val_y_true = np.concatenate(val_y_true, axis=0) if len(val_y_true) > 0 else np.array([])
                 val_y_pred = np.concatenate(val_y_pred, axis=0) if len(val_y_pred) > 0 else np.array([])
-
-
-                # Save scatter of first up-to-25 samples (if present)
-                if val_y_true.size:
-                    n_display = min(25, val_y_true.shape[0])
-                    val_y_true_25 = val_y_true[:n_display, :]
-                    val_y_pred_25 = val_y_pred[:n_display, :]
-
-                    # Create grid (square)
-                    grid_sz = int(np.ceil(np.sqrt(n_display)))
-                    fig, axes = plt.subplots(nrows=grid_sz, ncols=grid_sz, figsize=(4 * grid_sz, 4 * grid_sz))
-                    axes = np.atleast_2d(axes)
-                    for idx in range(n_display):
-                        r = idx // grid_sz
-                        c = idx % grid_sz
-                        axes[r, c].scatter(val_y_true_25[idx], val_y_pred_25[idx], alpha=0.6)
-                        min_val = min(val_y_true_25[idx].min(), val_y_pred_25[idx].min())
-                        max_val = max(val_y_true_25[idx].max(), val_y_pred_25[idx].max())
-                        axes[r, c].plot([min_val, max_val], [min_val, max_val], linestyle='--', color='red')
-                        axes[r, c].set_title(f"Sample {idx+1}")
-                    plt.tight_layout()
-                    scatter_save_path = os.path.join(model_save_dir, f"fold_{fold_idx+1}", f"scatter_plot_25_samples_epoch_{epoch+1}.png")
-                    os.makedirs(os.path.dirname(scatter_save_path), exist_ok=True)
-                    plt.savefig(scatter_save_path)
-                    plt.close(fig)
 
                 results_val = compute_metrics(val_y_true, val_y_pred) if val_y_true.size else {}
 
@@ -829,10 +551,6 @@ def main():
             "G1", "G2", "G3",
             "H1", "H2", "H3"
         ]
-        # gsm_samples =  [
-        #     "A1", "A2", "A3", "A4", "A5", "A6"
-        # ]      
-
     
     def get_patient_id(sample, dataset_name):
         if dataset_name == "cscc":

@@ -1,6 +1,6 @@
 # TinyH2GNet: Exploring Lightweight Models for Gene Expression Prediction from H&E Images
 
-This repository contains the implementation for predicting spatial gene expression from histopathology images using convolutional and transformer-based models. The focus of this work is to analyze the trade-off between model size, prediction performance, and inference time.
+Predicting spatial gene expression from histopathology images using convolutional and transformer-based models. The focus of this work is to analyze the trade-off between model size, prediction performance, and inference time.
 
 ## Overview
 
@@ -127,11 +127,6 @@ python main.py --config parameters.json
 python evaluation/evaluation_visium.py
 ```
 
-### CPU-only Inference
-```bash
-python evaluation/evaluation_visium.py --device cpu
-```
-
 ## Repository Structure
 
 ```
@@ -143,11 +138,3 @@ code_model_training/
 ├── parameters.json         # Experiment configuration
 └── modelResults/           # Saved models and outputs
 ```
-
-## Reproducibility
-
-- Fixed random seed (123)
-- Identical patient-wise splits across models
-- All hyperparameters specified in configuration files
-
-Results reproducible with provided scripts.
