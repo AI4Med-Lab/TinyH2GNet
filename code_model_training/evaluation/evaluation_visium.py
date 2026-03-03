@@ -1,6 +1,6 @@
 import sys
-sys.path.append('/home/puneet/mk/code_model_training/models')
-sys.path.append('/home/puneet/mk/code_model_training/utils')
+sys.path.append('code_model_training/models')
+sys.path.append('code_model_training/utils')
 
 import os
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
@@ -106,37 +106,6 @@ def load_model(model_name, model_path, num_genes):
     model.to(DEVICE)
     model.eval()
     return model
-
-
-# def predict(model, dataset):
-#     loader = DataLoader(dataset, batch_size=BATCH_SIZE, shuffle=False)
-#     preds, gts = [], []
-
-#     start_time = time()
-
-#     with torch.no_grad():
-#         for i, (imgs, genes) in enumerate(tqdm(loader, desc="Predicting")):
-#             batch_start = time()
-
-#             imgs = imgs.to(DEVICE)
-#             genes = genes.to(DEVICE)
-
-#             out = model(imgs)
-#             if isinstance(out, tuple):
-#                 out = out[0]
-                
-#             out = torch.where(out < 0, torch.tensor(0.0, device=out.device),out)
-#             preds.append(out.cpu().numpy())
-#             gts.append(genes.cpu().numpy())
-
-#             batch_time = time() - batch_start
-#             print(f"Batch {i+1}/{len(loader)} took {batch_time:.3f} sec")
-
-#     total_time = time() - start_time
-#     print(f"\nTotal prediction time: {total_time:.2f} sec")
-#     print(f"Average time per batch: {total_time/len(loader):.3f} sec")
-
-#     return np.vstack(preds), np.vstack(gts)
 
 
 def predict(model, dataset):
@@ -398,22 +367,6 @@ def evaluate(params):
 
     # Use Ensembl IDs for hist2st_845, symbols otherwise
     disease_genes = disease_genes_matched
-
-    # -----------------------------
-    # Dataset
-    # -----------------------------
-    # datasets = [
-    #     PatchDataset(
-    #         gene_path=a,
-    #         img_path=p,
-    #         gene_names=gene_names,
-    #         log_norm=True,
-    #         scale_factor=1000000
-    #     )
-    #     for a, p in zip(adata_paths, patch_paths)
-    # ]
-
-    # full_dataset = ConcatDataset(datasets)
 
     # -----------------------------
     # K-FOLD EVALUATION

@@ -1,6 +1,6 @@
 import sys
-sys.path.append('/home/puneet/mk/code_model_training/models')
-sys.path.append('/home/puneet/mk/code_model_training/utils')
+sys.path.append('/code_model_training/models')
+sys.path.append('/code_model_training/utils')
 
 import warnings
 warnings.filterwarnings("ignore")
@@ -32,14 +32,10 @@ from utils.thiToGene import THItoGeneH5Dataset, THItoGeneHER2Dataset
 from compute_metrics import compute_metrics, spearmanrr
 from setup_logger import setup_logging
 from set_deterministic_seed import set_deterministic_seed
-from models import STNet, EfficientNet, EfficientNetB4GeneRegressor, Custom_VGG16, HisToGene, TCGN, EfficientNet_GeneCaptionContrastive, GEMResNet18, GEMEfficientNetB0, MobileNetV2Regressor, HierarchicalDenseNet
-from models import TinySTNet, RefinedTinySTNet, TinyEfficientNet, RefinedTinyEfficientNet, THItoGeneModel
+from models import STNet, EfficientNet, EfficientNetB4GeneRegressor, Custom_VGG16, HisToGene, TCGN
 from model_eff_net_versions import EfficientNetTinyStudent
-from torch.utils.data import ConcatDataset
-from proposedModels import ImageGeneCrossTransformer
 from sklearn.model_selection import KFold, GroupKFold
-from proposedModels2 import ImageToGeneTransformer
-from loss_gene_wise import gene_weighted_mse_loss, kd_loss, distil_loss
+
 
 def main():
      

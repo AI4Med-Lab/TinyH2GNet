@@ -116,28 +116,3 @@ class EfficientNetTinyStudent(nn.Module):
         return self.head(x)
 
 
-# class TeacherEnsemble(nn.Module):
-#     def __init__(self, teachers):
-#         """
-#         teachers: list of pretrained teacher models (EffNet-B0, ST-Net, HisToGene, etc.)
-#         """
-#         super().__init__()
-#         self.teachers = nn.ModuleList(teachers)
-
-#         # Freeze teachers
-#         for t in self.teachers:
-#             for p in t.parameters():
-#                 p.requires_grad = False
-#             t.eval()
-
-#     @torch.no_grad()
-#     def forward(self, x):
-#         preds = []
-#         for t in self.teachers:
-#             preds.append(t(x))   # shape: [B, num_genes]
-
-#         # Mean ensemble
-#         ensemble_pred = torch.stack(preds, dim=0).mean(dim=0)
-#         return ensemble_pred
-
-

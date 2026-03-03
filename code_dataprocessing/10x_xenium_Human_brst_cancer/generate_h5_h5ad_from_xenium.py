@@ -3,8 +3,8 @@
 Generate H5 and H5AD files for Xenium H&E + Spatial Transcriptomics Data
 
 Outputs:
-1️⃣ cells_patches.h5  → (N, H, W, C) array + coordinates
-2️⃣ cells_expression.h5ad → gene expression + spatial coordinates
+1️ cells_patches.h5  → (N, H, W, C) array + coordinates
+2️ cells_expression.h5ad → gene expression + spatial coordinates
 """
 
 import os
@@ -21,7 +21,7 @@ import scipy.sparse as sp
 from tqdm import tqdm
 
 # ---------------------------------------------------------------------
-#  1️⃣ Argument Parser
+#   Argument Parser
 # ---------------------------------------------------------------------
 def parse_args():
     parser = argparse.ArgumentParser(description="Generate .h5 and .h5ad for Xenium dataset")
@@ -37,7 +37,7 @@ def parse_args():
 
 
 # ---------------------------------------------------------------------
-#  2️⃣ Logging setup
+#  Logging setup
 # ---------------------------------------------------------------------
 def setup_logging(log_file):
     logging.basicConfig(
@@ -50,7 +50,7 @@ def setup_logging(log_file):
 
 
 # ---------------------------------------------------------------------
-#  3️⃣ Helper functions
+#  Helper functions
 # ---------------------------------------------------------------------
 def load_transforms(cells_zarr, align_csv, experiment_json):
     """Load alignment, mask scale, and compose final µm→pixel transform."""
@@ -141,7 +141,7 @@ def read_xenium_expression(path):
     return adata
 
 # ---------------------------------------------------------------------
-#  4️⃣ Main Processing
+#   Main Processing
 # ---------------------------------------------------------------------
 def main():
     args = parse_args()
@@ -202,7 +202,7 @@ def main():
         hf.create_dataset("cell_ids", data=cell_ids)
         hf.create_dataset("coords_px", data=np.vstack([x_px, y_px]).T)
 
-    logging.info(f"✅ Saved patches to {h5_out} with shape {patches.shape}")
+    logging.info(f"Saved patches to {h5_out} with shape {patches.shape}")
 
     # -----------------------------------------------------------------
     # Generate H5AD (expression + spatial coordinates)

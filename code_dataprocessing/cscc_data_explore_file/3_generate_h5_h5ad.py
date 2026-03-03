@@ -13,7 +13,7 @@ import argparse
 Image.MAX_IMAGE_PIXELS = None
 
 # ------------------------------------------------------------
-# 1️⃣ Argument configuration
+# Argument configuration
 # ------------------------------------------------------------
 parser = argparse.ArgumentParser(description="Generate .h5 and .h5ad for one or multiple samples by index")
 
@@ -30,7 +30,7 @@ OUT_DIR = args.out_dir
 os.makedirs(OUT_DIR, exist_ok=True)
 
 # ------------------------------------------------------------
-# 2️⃣ Identify samples
+# Identify samples
 # ------------------------------------------------------------
 all_files = sorted([f for f in os.listdir(BASE_DIR) if f.endswith(".gz")])
 sample_ids = sorted(set(
@@ -56,7 +56,7 @@ else:
 print("=" * 90)
 
 # ------------------------------------------------------------
-# 3️⃣ Helper functions
+# Helper functions
 # ------------------------------------------------------------
 def load_image_gz(path):
     with gzip.open(path, "rb") as f:
@@ -76,7 +76,7 @@ def extract_patch(image, center_x, center_y, patch_size):
     return np.array(patch)
 
 # ------------------------------------------------------------
-# 4️⃣ Loop through selected samples
+# Loop through selected samples
 # ------------------------------------------------------------
 for idx in selected_indices:
     if idx < 1 or idx > len(sample_ids):

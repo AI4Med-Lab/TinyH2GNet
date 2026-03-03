@@ -1,5 +1,5 @@
 import sys
-sys.path.append('/home/puneet/mk/code_model_training/models/THItoGene')
+sys.path.append('code_model_training/models/THItoGene')
 
 import h5py
 import scanpy as sc

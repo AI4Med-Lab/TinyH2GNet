@@ -1,23 +1,15 @@
-##############################
-'''
-Dataset path :-  /home/puneet/mk/data/her2st_dataset/
-Dataset path :-  /home/puneet/mk/data/cscc_dataset/
-'''
-##############################
-
-
-
-
 import sys
-sys.path.append('/home/puneet/mk/code_model_training/models')
-sys.path.append('/home/puneet/mk/code_model_training/utils')
+sys.path.append('code_model_training/models')
+sys.path.append('code_model_training/utils')
 
 import warnings
-import h5py
+warnings.filterwarnings("ignore")
+
+import gc
 import csv
 import anndata as ad
 import numpy as np
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import Dataset, DataLoader, ConcatDataset, Subset
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -26,42 +18,30 @@ from sklearn.neighbors import NearestNeighbors
 from sklearn.metrics import mean_absolute_error
 import os
 import matplotlib.pyplot as plt
-from torch.optim import Adam
+from torch.optim import Adam, SGD
 from torch.nn import MSELoss
-from torch.utils.data import ConcatDataset
 from datetime import datetime
-import logging
 import argparse
 import json
 import pandas as pd
 from scipy import sparse
 from scipy.stats import pearsonr
 from torch.nn import DataParallel
-# from test_transformers import VisionTransformer, GeneExpressionSwinTimm
-# from transformerModels import VisionTransformer
-# from test_transformers_multi_layers import VisionTransformer
-
-from transformerModels import VisionTransformer
-# from models import GraphNN
-
-from losses_2 import CustomLossRgv2, CustomLossRgv3, CustomLossRgv4
-from models2 import EncoderDecoderRgv
-from regression_models import CNN_regression_model, CNN_regression_reduced_model,CNN_regression_model_three_fc
-from losses import contrastive_loss, spearmanrr, custom_spearmanr_old2, spearmanrr_feature_wise, custom_spearmanr_with_mse,custom_loss_dynamic_lambda_v5, custom_spearmanr_old, custom_spearmanr_non_zero_mask, custom_loss_pred_cosine, custom_loss_l1_pred_cosine,custom_loss_l1_spearman, custom_loss_l1_spearman_cosine,custom_loss_weighted_non_zeros, custom_loss_pred_zeros, custom_loss_weighted_non_zeros_l1, custom_loss_weighted_penalty_non_zeros,custom_loss_weighted_penalty, custom_spearmanr
-# from get_neighbour_indices import SpatialGeneExpressionDataset, SpatialGeneExpressionDatasetValidationBased
-from get_neighbour_indices_2 import SpatialGeneExpressionDataset, SpatialGeneExpressionValidationDataset
+from sklearn.model_selection import KFold, GroupKFold
+from utils.dataPrep import PatchDataset
 from compute_metrics import compute_metrics, spearmanrr
 from setup_logger import setup_logging
-from data_splits import split_train_validation
-torch.manual_seed(123)
+from set_deterministic_seed import set_deterministic_seed
+from models import STNet, EfficientNet, Custom_VGG16, HisToGene, TCGN
+from model_eff_net_versions import EfficientNetTinyStudent
+from torch.utils.data import ConcatDataset
 
-
-# Suppress all warnings
-warnings.filterwarnings("ignore")
 def main():
+     
+    g, seed_worker = set_deterministic_seed(123)   
+     
     parser = argparse.ArgumentParser(description="Script that uses a JSON configuration file")
     parser.add_argument('--config', type=str, required=True, help='Path to the JSON configuration file')
-
     args = parser.parse_args()
 
     try:
@@ -73,514 +53,607 @@ def main():
     except json.JSONDecodeError:
         print(f"Error: Failed to parse JSON file at {args.config}")
         return
-
-    params["info"] = "Model for Inflamed data."
-    params["neighbours_information"] = "euclidean distence using KNN function"
+    
+    # g, seed_worker = set_deterministic_seed(params.get("seed", 123))
     
     timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    model_save_dir = os.path.join(params['result_path'], f"result_vit_{timestamp}")
-    os.makedirs(model_save_dir,  exist_ok=True)
+    model_save_dir = os.path.join(params['result_path'], f"result_{timestamp}")
+    os.makedirs(model_save_dir, exist_ok=True)
 
-    json_file = os.path.join(model_save_dir,f"experiment_info.json")
-
+    json_file = os.path.join(model_save_dir, f"experiment_info.json")
     with open(json_file, "w") as exp:
         json.dump(params, exp, indent=4)
 
-    
     log_file = os.path.join(model_save_dir, "results_log.txt")
     logger = setup_logging(log_file)
     logger.info("Logging setup complete.")
     logger.info(f"Experiment information saved to the path: {json_file}")
 
-
     metrics_csv_path = os.path.join(model_save_dir, "metrics_result.csv")
 
     # Write CSV headers (only once before the loop starts)
+    # We'll append per-fold & per-epoch rows later
     with open(metrics_csv_path, mode='w', newline='') as csvfile:
         writer = csv.DictWriter(csvfile, fieldnames=[
-            'epoch','custom_loss','pearson_mean','spearman_mean_cell_wise','spearman_mean_genewise', 'l1_error_mean', 'l2_errors_mean', 'r2_scores_mean', 
-            'pearson_std', 'l2_error_q1', 'l2_error_q2', 'l2_error_q3', 'r2_score_q1', 'r2_score_q2', 'r2_score_q3'
+            'fold', 'epoch', 'phase', 'custom_loss', 'pearson_mean_cell_wise', 'spearman_mean_cell_wise', 'pearson_mean_genewise', 
+            'spearman_mean_genewise','l1_error_mean', 'l2_errors_mean', 'r2_scores_mean', 'pearson_std',
+            'l2_error_q1', 'l2_error_q2', 'l2_error_q3',
+            'r2_score_q1', 'r2_score_q2', 'r2_score_q3', 'mape_mean', 'mape_std', 'rmse_mean', 'rmse_std'
         ])
         writer.writeheader()
 
-    def train_regression_with_custom_loss(train_datasets, val_datasets, k_spatial_neighbors=params['k_spatial_neighbors'], k_gene_exp_neighbors=params['k_gene_exp_neighbors'], lambda_reg=params["lambda_reg"], learning_rate=params['learning_rate'], epochs=params['epochs'], batch_size=params['batch_size']):
+    # --- Training routine (mostly unchanged) ---
+    def train_regression(train_datasets, val_datasets, fold_idx,
+                                          lambda_reg=params.get("lambda_reg", 0.0),
+                                          learning_rate=params['learning_rate'],
+                                          epochs=params['epochs'],
+                                          batch_size=params['batch_size'],
+                                          weight_decay=params['weight_decay']):
+
         models = {}
 
-        # train_datasets, ext_datasets =  split_train_validation(train_datasets, val_split_ratio = params["val_split_ratio"])
+        logger.info(f"train_datasets length:  {len(train_datasets)}")
+        train_dataloader = DataLoader(train_datasets, batch_size=batch_size, shuffle=True,  num_workers=0, persistent_workers=False, worker_init_fn=seed_worker, generator=g)
+        val_dataloader = DataLoader(val_datasets, batch_size=batch_size, shuffle=False,  num_workers=0, persistent_workers=False, worker_init_fn=seed_worker, generator=g)
 
-        # logger.info(f"train_datasets:  {len(train_datasets)} ext_datasets: {len(ext_datasets)}")
-        logger.info(f"train_datasets:  {len(train_datasets)}")
-        train_dataloader = DataLoader(train_datasets, batch_size=batch_size, shuffle=True)
-
-        # val_datasets = val_datasets + ext_datasets
-        print(f"val_datasets {len(val_datasets)}")
-        val_dataloader = DataLoader(val_datasets, batch_size=batch_size, shuffle=False)
-
-        logger.info(f"Number of batches: {len(train_dataloader)}")
+        logger.info(f"Number of train batches: {len(train_dataloader)}")
         logger.info("Initializing model...")
 
-        input_height = (params['k_spatial_neighbors'] + params['k_gene_exp_neighbors'] + 1)  # Example input height
-        input_width = params['embeddings']  # Example input width
-        output_size = 460  # Example output size
-
-        if params["model"] == "CNN_regression_model":
-            model = CNN_regression_model(input_height=input_height, input_width=input_width, output_size=output_size)
-
-        elif params["model"] == "EncoderDecoderRgv":
-            # Hyperparameters
-
-            input_dim = params["embeddings"]
-            hidden_dim = 512
-            output_dim = 460  
-            batch_size = params["batch_size"]
-            learning_rate = 0.0001
-            dropout_rate = 0.1
-            regularization_strength = 2.0
-
-            model = EncoderDecoderRgv(input_dim, hidden_dim, output_dim, dropout_rate)
-
-
-        elif params["model"] == "VisionTransformer":
-            # input_dim = 1024
-            # seq_length = 11
-            # num_hiddens = 512
-            # num_heads = 2
-            # num_blks = 2
-            # output_dim = 460
-
-            # seq_length = 11
-            # input_dim = 1024
-            # hidden_dim = 512
-            # num_heads = 32
-            # num_blks = 4
-            # output_dim = 460
-            seq_length = 1
-            input_dim = params["embeddings"]
-            hidden_dim = 512
-            num_heads = 2
-            num_blks = 4
-            output_dim = 200
-            dropout = 0.1
-            model = VisionTransformer(input_dim, seq_length,  hidden_dim, num_heads, num_blks, output_dim, dropout)
-        # elif params["model"] == "GNN":
-        #     model = GraphNN()
+        if params['dataset_name'] == "cscc":
+            num_genes = 171
+        elif params['dataset_name'] == "her2":
+            num_genes = 785
+        elif params['dataset_name'] == "hist2st_845":
+            num_genes = 845
         else:
-            print('No model found')
+            raise ValueError(f"Unknown dataset name: {params['dataset_name']}")
+
+        if params["model"] == "STNet":
+            pretrained = params.get("pretrained", True)
+            model = STNet(num_genes=num_genes, pretrained=pretrained)
+            
+            logger.info(f"STNet initialized with {sum(p.numel() for p in model.parameters() if p.requires_grad):,} trainable parameters.")
         
-        num_gpus = torch.cuda.device_count()
-        logger.info(f"Number of GPUs available: {num_gpus}")
+        elif params["model"] == "VGG":
+            pretrained = params.get("pretrained", True)
+            model = Custom_VGG16(num_genes=num_genes, pretrained=pretrained)
+            
+            logger.info(f"VGG initialized with {sum(p.numel() for p in model.parameters() if p.requires_grad):,} trainable parameters.")
+        
+        elif params["model"] == "Effnet":
+            pretrained = params.get("pretrained", True)
+            model = EfficientNet(num_genes=num_genes, pretrained=pretrained) 
+            
+            logger.info(f"Effnet initialized with {sum(p.numel() for p in model.parameters() if p.requires_grad):,} trainable parameters.")
+            
+        elif params["model"] == "HisToGene":
+            model = HisToGene(patch_size=16, n_layers= 8, n_genes=num_genes)
+            
+        elif params["model"] == "TCGN":            
+            logger.info("Initializing TCGN model...")
 
-        gpu_id = params["device_ids"]
-        # Check if GPU 1 and GPU 2 are available
-        if num_gpus > 2:  # Ensure you have at least 3 GPUs (indices 0, 1, and 2)
-            logger.info("Using GPUs " + str(gpu_id[0]))
-            device_ids = params["device_ids"]  # Specify the GPUs to use
-            device = torch.device(f"cuda:{device_ids[0]}")  # Set primary device to cuda:1
-            print(device)
+            # # Set up model parameters
+            # tcgn_kwargs = dict(
+            #     img_size=params.get("image_height", 224),
+            #     in_chans=params.get("image_channels", 3),
+            #     num_classes=num_genes,
+            #     embed_dims=params.get("embed_dims", [52, 104, 208, 416]),
+            #     stem_channel=params.get("stem_channel", 16),
+            #     fc_dim=params.get("fc_dim", 1280),
+            #     num_heads=params.get("num_heads", [1, 2, 4, 8]),
+            #     mlp_ratios=params.get("mlp_ratios", [3.6, 3.6, 3.6, 3.6]),
+            #     qkv_bias=True,
+            #     qk_scale=None,
+            #     representation_size=None,
+            #     drop_rate=params.get("drop_rate", 0.0),
+            #     attn_drop_rate=params.get("attn_drop_rate", 0.0),
+            #     drop_path_rate=params.get("drop_path_rate", 0.0),
+            #     hybrid_backbone=None,
+            #     norm_layer=None,
+            #     depths=params.get("depths", [2, 2, 10, 2]),
+            #     qk_ratio=params.get("qk_ratio", 1),
+            #     sr_ratios=params.get("sr_ratios", [8, 4, 2, 1]),
+            #     dp=params.get("dropout", 0.1)
+            # )
+
+            # # Instantiate the model
+            # model = TCGN(**tcgn_kwargs)
+            model = TCGN(num_classes=num_genes)
+            logger.info(f"TCGN initialized with {sum(p.numel() for p in model.parameters() if p.requires_grad):,} trainable parameters.")
+
+        elif params["model"] == "EfficientNetTinyStudent":
+            logger.info("EfficientNetTinyStudent (tiny) for gene expression prediction.")
+            phi = params.get("phi", -7.0)
+            model = EfficientNetTinyStudent(num_genes=num_genes, phi=phi)
+            
+            logger.info(f"EfficientNetTinyStudent initialized with {sum(p.numel() for p in model.parameters() if p.requires_grad):,} trainable parameters.")
+
         else:
-            logger.info("GPU 1 and GPU 2 are not available. Please check your system configuration.")
-            raise RuntimeError("Insufficient GPUs available.")
+            logger.error('No model found with name: %s', params["model"])
+            raise ValueError("No model found")
 
-        torch.cuda.empty_cache()
+        logger.info("Model\n%s", model)
 
-        # Wrap model with DataParallel and send to device
-        if len(device_ids) > 1:
-            logger.info(f"Using {len(device_ids)} GPUs: {device_ids}")
-            model = DataParallel(model, device_ids=device_ids)
 
-        model.to(device)  # Move the model to the primary device
-        logger.info(f"Model is using device(s): {device_ids}")
+        # Device / GPU logic (robust). Always set a device (GPU if available, else CPU)
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        logger.info(f"Using device: {device}")
+        model.to(device)
 
-        logger.info(f"Model:{model}")
-
-        if params["optimizer"] == "Adam":
-            optimizer = Adam(model.parameters(), lr=learning_rate)
-        elif params["optimizer"] == "sgd":
+        # Optimizer
+        if params.get("optimizer", "Adam").lower() == "adam":
+            optimizer = Adam(model.parameters(), lr=learning_rate, weight_decay= weight_decay)
+        elif params.get("optimizer", "sgd").lower() == "sgd":
             optimizer = SGD(model.parameters(), lr=learning_rate, momentum=0.9)
         else:
-            print("Optimizer not defined!!!")
+            logger.error("Optimizer not defined!!! Defaulting to Adam")
+            optimizer = Adam(model.parameters(), lr=learning_rate)
 
         scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-        optimizer,
-        mode='min',  # Minimize validation loss
-        patience=params['lr_patience'],  # Number of epochs to wait before reducing LR
-        factor=params['lr_factor'],  # Factor by which the learning rate will be reduced
-        min_lr=params['min_lr'],  # Minimum learning rate
-        verbose=True  # Log LR reduction
+            optimizer,
+            mode='min',
+            patience=params.get('lr_patience', 5),
+            factor=params.get('lr_factor', 0.5),
+            min_lr=params.get('min_lr', 1e-7),
+            verbose=True
         )
 
         train_losses = []
         val_losses = []
 
-        # Initialize variables for early stopping
-        # best_val_loss = float("inf")
-        best_spearman = -1
+        best_spearman = -np.inf
         patience_counter = 0
-        patience = 15  # You can adjust this value
+        patience = params.get('early_stopping_patience', 15)
 
         # Training loop
         for epoch in range(epochs):
             model.train()
-            epoch_train_loss = 0
+            epoch_train_loss = 0.0
             all_y_true = []
             all_y_pred = []
             pearson_train_corr = []
             spearman_train_corr = []
 
-            count = 0
-            for features, target in train_dataloader:
-                print("Feature Length", features['stacked_embeddings'].shape)
-                stacked_embeddings = torch.tensor(features['stacked_embeddings'], dtype=torch.float32).to(device)
-                if params["mean"] is True:
-                    stacked_embeddings = stacked_embeddings.mean(1)
-                    print("After Feature Length", stacked_embeddings.shape)
-                y_true = torch.tensor(target, dtype=torch.float32)[:, 0, :].to(device)
-                print("y_true ", y_true.shape)
-                if params["subset_gene"] is True:
-                    data = np.load("top_k_genes.npz")
+            for batch_idx, (images, targets) in enumerate(train_dataloader):
+                # Move data to device
+                images = images.to(device)             # shape: (B, 3, 224, 224)
+                y_true = targets.to(device)            # shape: (B, num_genes)
+                
+                
+                # === Sanity check: Detect NaNs or Infs in input data ===
+                if not torch.isfinite(images).all():
+                    logger.warning(f"[Epoch {epoch+1} | Batch {batch_idx}] NaN/Inf detected in input images. Skipping batch.")
+                    continue
+                if not torch.isfinite(y_true).all():
+                    logger.warning(f"[Epoch {epoch+1} | Batch {batch_idx}] NaN/Inf detected in ground truth. Skipping batch.")
+                    continue
 
-                    # top_k_values = data["values"]
-                    top_k_indices = data["indices"]
-                    top_k_indices =  torch.tensor(top_k_indices,dtype = torch.long)
-                    print(top_k_indices.shape)
-                    y_true = y_true[:,top_k_indices.view(-1)]
+                y_pred = model(images)                 # shape: (B, num_genes)
 
-                stacked_embeddings = stacked_embeddings.unsqueeze(1)
 
-                neighbors_gene_expression = target[:, 1:].view(target.shape[0], params['k_spatial_neighbors'] + params['k_gene_exp_neighbors'], target.shape[2]).to(device)
+                y_pred = torch.where(y_pred < 0, torch.tensor(0.0, device=y_pred.device), y_pred)
+                
+                # === Sanity check: Detect NaNs/Infs in predictions ===
+                if not torch.isfinite(y_pred).all():
+                    logger.warning(f"[Epoch {epoch+1} | Batch {batch_idx}] NaN/Inf detected in model output. Zeroing out predictions.")
+                    y_pred = torch.nan_to_num(y_pred, nan=0.0, posinf=0.0, neginf=0.0)
+
+
+                print(f"image : {images.shape}, y_true: {y_true.shape}, y_pred: {y_pred.shape}")
+                
+                if batch_idx == 0:
+                    print("\n===================== DEBUG: Epoch {} =====================".format(epoch + 1))
+                    print("Sample y_true values (first sample, first 10 genes):")
+                    print(y_true[0, :10].detach().cpu().numpy())
+                    print("Sample y_pred values (first sample, first 10 genes):")
+                    print(y_pred[0, :10].detach().cpu().numpy())
+
+                    # Compute basic stats
+                    y_true_np = y_true.detach().cpu().numpy()
+                    y_pred_np = y_pred.detach().cpu().numpy()
+
+                    print(f"y_true  -> mean={np.nanmean(y_true_np):.4f}, std={np.nanstd(y_true_np):.4f}, "
+                        f"min={np.nanmin(y_true_np):.4f}, max={np.nanmax(y_true_np):.4f}")
+
+                    print(f"y_pred  -> mean={np.nanmean(y_pred_np):.4f}, std={np.nanstd(y_pred_np):.4f}, "
+                        f"min={np.nanmin(y_pred_np):.4f}, max={np.nanmax(y_pred_np):.4f}")
+
+                # choose loss
+                # loss = None
+                loss_fn_name = params.get("loss_fn", "")
+                if loss_fn_name == "mse" or loss_fn_name == "MSELoss":
+                    mse_criterion = torch.nn.MSELoss()
+                    mse_loss = mse_criterion(y_pred, y_true)
+                    # if contrastive_loss is not None:
+                    #     loss = mse_loss + model.contrastive_weight * contrastive_loss
+                    # else:
+                    loss = mse_loss
+                else:
+                    logger.error("Loss Function not defined!!!")
+                    raise ValueError("Loss Function not defined")
 
                 optimizer.zero_grad()
-                y_pred = model(stacked_embeddings)
-
-                print(y_pred.shape)
-                # return
-                # print("y_pred::::::::::::", y_pred.shape)
-                # loss = custom_loss_l1_l2_pred_dot_product(y_true, y_pred, neighbors_gene_expression, model, lambda_l1=lambda_l1, lambda_l2=lambda_l2, lambda_reg=lambda_reg)
-                if params["loss_fn"] == "custom_loss_l1_pred_cosine": 
-                    loss = custom_loss_l1_pred_cosine(y_true, y_pred, neighbors_gene_expression)
-                elif params["loss_fn"] == "custom_loss_l1_spearman_cosine":
-                    loss = custom_loss_l1_spearman_cosine(y_true, y_pred, neighbors_gene_expression, lambda_reg=lambda_reg)
-                elif params["loss_fn"] == "custom_loss_l1_spearman":
-                    loss = custom_loss_l1_spearman(y_true, y_pred, lambda_reg=lambda_reg)
-                elif params["loss_fn"] == "custom_loss_weighted_non_zeros_l1":
-                    loss = custom_loss_weighted_non_zeros_l1(y_true, y_pred, neighbors_gene_expression, lambda_reg=lambda_reg)
-                elif params["loss_fn"] == "custom_loss_weighted_penalty_non_zeros":
-                    loss = custom_loss_weighted_penalty_non_zeros(y_true, y_pred, neighbors_gene_expression, lambda_reg=lambda_reg)
-                elif params["loss_fn"] == "custom_spearmanr_with_mse":
-                    loss = custom_spearmanr_with_mse(y_pred,y_true)
-                elif params["loss_fn"] == "custom_spearmanr_old":
-                    loss = custom_spearmanr_old(y_pred,y_true)
-                elif params["loss_fn"] == "custom_spearmanr_old2":
-                    loss = custom_spearmanr_old2(y_pred,y_true)
-                elif params["loss_fn"] == "custom_spearmanr_non_zero_mask":
-                    loss = custom_spearmanr_non_zero_mask(y_pred,y_true)
-                elif params["loss_fn"] == "contrastive_loss":
-                    loss = contrastive_loss(y_pred,y_true)
-                elif params["loss_fn"] == "CustomLossRgv4":
-                    criterion = CustomLossRgv4(l1_lambda=0.1, regularization_strength=1.0)
-                    loss = criterion(y_true, y_pred)  
-                elif params["loss_fn"] == "CustomLossRgv2":
-                    criterion = CustomLossRgv2(l1_lambda=0.1, regularization_strength=1.0)
-                    loss = criterion(y_true, y_pred)
-                else:
-                    print("Loss Function not defined!!!") 
-
+                
                 loss.backward()
                 optimizer.step()
-
-
-
                 torch.cuda.empty_cache()
+                gc.collect()
 
-                epoch_train_loss += loss.item()
+                epoch_train_loss += float(loss.item())
                 all_y_true.append(y_true.detach().cpu().numpy())
                 all_y_pred.append(y_pred.detach().cpu().numpy())
 
-                # print(y_pred.shape)
-                # print(y_true.shape)
+                try:
+                    batch_pearson = pearsonr(y_pred.detach().cpu().numpy().flatten(), y_true.detach().cpu().numpy().flatten())[0]
+                    print(f"Batch {batch_idx} Pearson correlation: {batch_pearson:.4f}")
+                except Exception as e:
+                    print("Exception+++++++++++++++++++++++++++++++++++++++++++++ ",{e})
+                    batch_pearson = 0.0
+                pearson_train_corr.append(float(batch_pearson.mean().item()))
 
-                # Calculate Pearson correlation for the batch
-                batch_pearson, _ = pearsonr(y_pred.detach().cpu().numpy().flatten(), y_true.detach().cpu().numpy().flatten())
+                # Spearman (use your function that returns vector)
+                try:
+                    batch_spearman = spearmanrr(y_pred, y_true)
+                    spearman_train_corr.append(batch_spearman.mean().item())
 
-                pearson_train_corr.append(batch_pearson.mean().item())
+                except Exception as e:
+                    print(f"code is in Exception++++++++++++++++++++++++++++++++ {e}")
+                    spearman_train_corr.append(0.0)
 
+                if batch_idx % 10 == 0:
+                    logger.info(f"Fold {fold_idx+1} Train Epoch {epoch + 1}/{epochs}, Batch {batch_idx}, Loss: {loss.item():.4f}, Pearson: {pearson_train_corr[-1]:.4f}, Spearman: {spearman_train_corr[-1]:.4f}")
 
-                # Calculate Spearman correlation for the batch
-                batch_spearman = spearmanrr(y_pred, y_true)
-                spearman_train_corr.append(batch_spearman.mean().item())
+            # epoch-level aggregation
+            all_y_true = np.vstack(all_y_true) if len(all_y_true) > 0 else np.array([])
+            all_y_pred = np.vstack(all_y_pred) if len(all_y_pred) > 0 else np.array([])
 
-                if count % 10 == 0:
-                    logger.info(f"Training Epoch {epoch + 1}/{epochs}, Training Batch: {count}, Training Batch Loss: {loss.item():.4f}, Pearson Correlation: {pearson_train_corr[-1]:.4f} , Spearman Correlation: {spearman_train_corr[-1]:.4f}")
-                count += 1
+            print(f"all_y_true: {type(all_y_true)}")
+            print(f"all_y_pred: {type(all_y_pred)}")
 
-            all_y_true = np.vstack(all_y_true)
-            all_y_pred = np.vstack(all_y_pred)
-            results_train = compute_metrics(all_y_true, all_y_pred)
+            print(f"========================= {np.mean((all_y_pred - all_y_true) ** 2)}")
+            results_train = compute_metrics(all_y_true, all_y_pred) if all_y_true.size else {}
 
-            logger.info(f"Training Epoch {epoch + 1}/{epochs}, Training Loss: {epoch_train_loss / len(train_dataloader):.4f}, Pearson Mean: {np.mean(pearson_train_corr):.4f} , Spearman Mean: {np.mean(spearman_train_corr):.4f}")
-            logger.info(f"Training Metrics: {results_train}")
+            
+            del loss, y_pred, y_true, images, all_y_true, all_y_pred
+            torch.cuda.empty_cache()
+            gc.collect()
+            
+            avg_train_loss = epoch_train_loss / max(1, len(train_dataloader))
+            logger.info(f"Fold {fold_idx+1} Train Epoch {epoch + 1}/{epochs}, Train Loss: {avg_train_loss:.4f}, Pearson Mean: {np.mean(pearson_train_corr):.4f}, Spearman Mean: {np.mean(spearman_train_corr):.4f}")
+            if results_train:
+                logger.info(f"Training Metrics: {results_train}")
 
-            results_train['epoch'] = f"train {epoch + 1}"
-            results_train['custom_loss'] = f"{epoch_train_loss / len(train_dataloader):.4f}"
-            results_train['spearman_mean_cell_wise'] = f"{np.mean(spearman_train_corr):.4f}"
+            # Write train row to CSV
+            with open(metrics_csv_path, mode='a', newline='') as csvfile:
+                writer = csv.DictWriter(csvfile, fieldnames=[
+                    'fold', 'epoch', 'phase', 'custom_loss', 'pearson_mean_cell_wise', 'spearman_mean_cell_wise', 'pearson_mean_genewise', 'spearman_mean_genewise',
+                    'l1_error_mean', 'l2_errors_mean', 'r2_scores_mean', 'pearson_std',
+                    'l2_error_q1', 'l2_error_q2', 'l2_error_q3',
+                    'r2_score_q1', 'r2_score_q2', 'r2_score_q3', 'mape_mean', 'mape_std', 'rmse_mean', 'rmse_std'
+                ])
+                row = {'fold': fold_idx + 1, 'epoch': epoch + 1, 'phase': 'train', 'custom_loss': f"{avg_train_loss:.4f}", 'pearson_mean_cell_wise': f"{np.mean(pearson_train_corr):.4f}", 'spearman_mean_cell_wise': f"{np.mean(spearman_train_corr):.4f}"}
+                # add other metrics if present
+                if results_train:
+                    for k in results_train:
+                        if k in writer.fieldnames:
+                            row[k] = results_train[k]
+                writer.writerow(row)
 
-            train_losses.append(epoch_train_loss / len(train_dataloader))
-
-            # Validation phase
+            train_losses.append(avg_train_loss)
+            
+            
+            # Validation
             model.eval()
-            epoch_val_loss = 0
+            epoch_val_loss = 0.0
             val_y_true = []
             val_y_pred = []
             spearman_val_corr = []
             pearson_val_corr = []
 
-            count = 0
             with torch.no_grad():
-                for features, target in val_dataloader:
+                for batch_idx, (images, targets) in enumerate(val_dataloader):
+                    # Move images and targets to GPU
+                    images = images.to(device)                          # shape: (B, 3, 224, 224)
+                    y_true = targets.to(device)                         # shape: (B, num_genes)
 
-                    print("Feature Length", features['stacked_embeddings'].shape)
-                    # print("target Length", len(target))
-                    stacked_embeddings = torch.tensor(features['stacked_embeddings'], dtype=torch.float32).to(device)
-
-
-                    # y_true = torch.tensor(target, dtype=torch.float32)[:, 0, :].to(device)
-                    y_true = torch.tensor(target, dtype=torch.float32).to(device)
-                    print("y_true original squeeze ", y_true.squeeze(1).shape)
-                    y_true = y_true.squeeze(1) 
-                    if  params["subset_gene"] is True:
-                        data = np.load("top_k_genes.npz")
-
-                        # top_k_values = data["values"]
-                        top_k_indices = data["indices"]
-                        top_k_indices =  torch.tensor(top_k_indices, dtype = torch.long)
-                        y_true = y_true[:, top_k_indices.view(-1)]
-                        print("y_true squeeze after gene selectin ", y_true.shape)
-
-                    if params["mean"] is not True:
-                        stacked_embeddings = stacked_embeddings.unsqueeze(1)
-                    # else:
-                    #     stacked_embeddings = stacked_embeddings.squeeze(1)
-                    #     target = target.squeeze(1)
-
-
-                    print("stacked_embeddings ", stacked_embeddings.shape)
-                    print("target shape before slicing: ", target.shape)
-
-
-                    # neighbors_gene_expression = target[:, 1:].view(target.shape[0], params['k_spatial_neighbors'] + params['k_gene_exp_neighbors'], target.shape[2]).to(device)
-                    y_pred = model(stacked_embeddings)
-                    y_pred = torch.where(y_pred < 0, torch.tensor(0.0, device=y_pred.device), y_pred)
-                    # loss = custom_loss_l1_l2_pred_dot_product(y_true, y_pred, neighbors_gene_expression, model, lambda_l1=lambda_l1, lambda_l2=lambda_l2, lambda_reg=lambda_reg)
-                    if params["loss_fn"] == "custom_loss_l1_pred_cosine": 
-                        loss = custom_loss_l1_pred_cosine(y_true, y_pred, neighbors_gene_expression)
-                    elif params["loss_fn"] == "custom_loss_l1_spearman_cosine":
-                        loss = custom_loss_l1_spearman_cosine(y_true, y_pred, neighbors_gene_expression, lambda_reg=lambda_reg)
-                    elif params["loss_fn"] == "custom_loss_l1_spearman":
-                        loss = custom_loss_l1_spearman(y_true, y_pred, lambda_reg=lambda_reg)
-                    elif params["loss_fn"] == "custom_loss_weighted_non_zeros_l1":
-                        loss = custom_loss_weighted_non_zeros_l1(y_true, y_pred, neighbors_gene_expression, lambda_reg=lambda_reg)
-                    elif params["loss_fn"] == "custom_loss_weighted_penalty_non_zeros":
-                        loss = custom_loss_weighted_penalty_non_zeros(y_true, y_pred, neighbors_gene_expression, lambda_reg=lambda_reg)
-                    elif params["loss_fn"] == "custom_spearmanr_with_mse":
-                        loss = custom_spearmanr_with_mse(y_pred,y_true)
-                    elif params["loss_fn"] == "custom_spearmanr_old":
-                        loss = custom_spearmanr_old(y_pred,y_true)
-                    elif params["loss_fn"] == "custom_spearmanr_old2":
-                        loss = custom_spearmanr_old2(y_pred,y_true)
-                    elif params["loss_fn"] == "custom_spearmanr_non_zero_mask":
-                        loss = custom_spearmanr_non_zero_mask(y_pred,y_true)
-                    elif params["loss_fn"] == "contrastive_loss":
-                        loss = contrastive_loss(y_pred,y_true)
-                    elif params["loss_fn"] == "CustomLossRgv2":
-                        criterion = CustomLossRgv2(l1_lambda=0.1, regularization_strength=1.0)
-                        loss = criterion(y_true, y_pred)
-                    elif params["loss_fn"] == "CustomLossRgv4":
-                        criterion = CustomLossRgv4(l1_lambda=0.1, regularization_strength=1.0)
-                        loss = criterion(y_true, y_pred)                    
-                    else:
-                        print("Loss Function not defined!!!")
+                    y_pred = model(images)    
                     
+                    y_pred = torch.where(y_pred < 0, torch.tensor(0.0, device=y_pred.device), y_pred)
 
-                    epoch_val_loss += loss.item()
+                    loss_fn_name = params.get("loss_fn", "")
+                    if loss_fn_name == "mse" or loss_fn_name == "MSELoss":
+                        mse_criterion = torch.nn.MSELoss()
+                        loss = mse_criterion(y_pred, y_true)
+                    else:
+                        logger.error("Loss Function not defined!!!")
+                        raise ValueError("Loss Function not defined")
+
+                    epoch_val_loss += float(loss.item())
                     val_y_true.append(y_true.detach().cpu().numpy())
                     val_y_pred.append(y_pred.detach().cpu().numpy())
 
+                    try:
+                        batch_pearson = pearsonr(y_pred.detach().cpu().numpy().flatten(), y_true.detach().cpu().numpy().flatten())[0]
+                    except Exception:
+                        batch_pearson = 0.0
+                    pearson_val_corr.append(float(batch_pearson.mean().item()))
 
-                    # Calculate Pearson correlation for the batch
-                    batch_pearson, _ = pearsonr(y_pred.detach().cpu().numpy().flatten(), y_true.detach().cpu().numpy().flatten())
-                    pearson_val_corr.append(batch_pearson.mean().item())
+                    try:
+                        batch_spearman = spearmanrr(y_pred, y_true)
+                        spearman_val_corr.append(float(batch_spearman.mean().item()))
+                    except Exception:
+                        spearman_val_corr.append(0.0)
 
-                    # Calculate Spearman correlation for the batch
-                    batch_spearman = spearmanrr(y_pred, y_true)
-                    spearman_val_corr.append(batch_spearman.mean().item())
+                    if batch_idx % 10 == 0:
+                        logger.info(f"Fold {fold_idx+1} Val Epoch {epoch + 1}/{epochs}, Batch {batch_idx}, Loss: {loss.item():.4f}, Pearson: {pearson_val_corr[-1]:.4f}, Spearman: {spearman_val_corr[-1]:.4f}")
 
-                    if count % 10 == 0:
-                        logger.info(f"Validation Epoch {epoch + 1}/{epochs}, Validation Batch: {count}, Validation Batch Loss: {loss:.4f}, Pearson Correlation: {pearson_val_corr[-1]:.4f} , Spearman Correlation: {spearman_val_corr[-1]:.4f}")
-                    count += 1
-
-                val_y_true = np.vstack(val_y_true) if val_y_true else np.array([])
-                val_y_pred = np.vstack(val_y_pred) if val_y_pred else np.array([])
-
-                # import random
-                # random_samples = random.sample(range(1, batch_size), 5)
-                val_y_true_25 = val_y_true[:25, :]  
-                val_y_pred_25 = val_y_pred[:25, :]  
-
-                # Create a 5x5 grid of subplots
-                fig, axes = plt.subplots(nrows=5, ncols=5, figsize=(25, 25))  # Adjust figsize for better visibility
-
-                for i in range(5):  # Row index
-                    for j in range(5):  # Column index
-                        sample_index = i * 5 + j  # Calculate the sample index (0 to 24)
-                        
-                        # Scatter plot for the specific sample
-                        axes[i, j].scatter(val_y_true_25[sample_index], val_y_pred_25[sample_index], 
-                                           color="blue", alpha=0.6, label="True vs Predicted")
-                        
-                        # Add a red line for perfect prediction
-                        min_val = min(val_y_true_25[sample_index].min(), val_y_pred_25[sample_index].min())
-                        max_val = max(val_y_true_25[sample_index].max(), val_y_pred_25[sample_index].max())
-                        axes[i, j].plot([min_val, max_val], [min_val, max_val], color='red', linestyle='--', label='Perfect Prediction Line')
-                        
-                        # Add labels and title
-                        axes[i, j].set_xlabel("Ground Truth (460 Features)")
-                        axes[i, j].set_ylabel("Predicted Values (460 Features)")
-                        axes[i, j].set_title(f"Sample {sample_index + 1}")
-                        axes[i, j].grid(True)
-
-                # Add a single legend for the entire figure
-                handles, labels = axes[0, 0].get_legend_handles_labels()
-                fig.legend(handles, labels, loc='upper center', ncol=2, bbox_to_anchor=(0.5, 1.05))
-
-                # Adjust layout, save, and show the plot
-                plt.tight_layout()
-                scatter_save_path = os.path.join(model_save_dir, f"scatter_plot_25_samples_epoch_{epoch+1}.png")
-                plt.savefig(scatter_save_path, format="png")
-
-                results_val = compute_metrics(val_y_true, val_y_pred)
-
-                logger.info(f"Validation Epoch {epoch + 1}/{epochs}, Validation Loss: {epoch_val_loss / len(val_dataloader):.4f}, Pearson Mean: {np.mean(pearson_val_corr):.4f} , Spearman Mean: {np.mean(spearman_val_corr):.4f}")
-                logger.info(f"Validation Metrics: {results_val}")
+                val_y_true = np.vstack(val_y_true) if len(val_y_true) > 0 else np.array([])
+                val_y_pred = np.vstack(val_y_pred) if len(val_y_pred) > 0 else np.array([])
                 
-                results_val['epoch'] = f"val {epoch + 1}"
-                results_val['custom_loss'] = f"{epoch_val_loss / len(val_dataloader):.4f}"
-                results_val['spearman_mean_cell_wise'] = f"{np.mean(spearman_val_corr):.4f}"
+                results_val = compute_metrics(val_y_true, val_y_pred) if val_y_true.size else {}
 
-                # Save metrics to CSV
+
+                # Memory cleanup per validation batch
+                del loss, y_pred, y_true, images
+                torch.cuda.empty_cache()
+                gc.collect()
+
+
+                avg_val_loss = epoch_val_loss / max(1, len(val_dataloader))
+                logger.info(f"Fold {fold_idx+1} Val Epoch {epoch + 1}/{epochs}, Val Loss: {avg_val_loss:.4f}, Pearson Mean: {np.mean(pearson_val_corr):.4f}, Spearman Mean: {np.mean(spearman_val_corr):.4f}")
+                if results_val:
+                    logger.info(f"Validation Metrics: {results_val}")
+
+                # Write val row to CSV
                 with open(metrics_csv_path, mode='a', newline='') as csvfile:
                     writer = csv.DictWriter(csvfile, fieldnames=[
-                        'epoch', 'custom_loss', 'pearson_mean', 'spearman_mean_cell_wise','spearman_mean_genewise','l1_error_mean', 'l2_errors_mean', 'r2_scores_mean', 
-                        'pearson_std', 'l2_error_q1', 'l2_error_q2', 'l2_error_q3',
-                        'r2_score_q1', 'r2_score_q2', 'r2_score_q3'
+                        'fold', 'epoch', 'phase', 'custom_loss', 'pearson_mean_cell_wise', 'spearman_mean_cell_wise', 'pearson_mean_genewise', 'spearman_mean_genewise',
+                        'l1_error_mean', 'l2_errors_mean', 'r2_scores_mean', 'pearson_std',
+                        'l2_error_q1', 'l2_error_q2', 'l2_error_q3',
+                        'r2_score_q1', 'r2_score_q2', 'r2_score_q3', 'mape_mean', 'mape_std', 'rmse_mean', 'rmse_std'
                     ])
-                    writer.writerow({key: results_train[key] for key in writer.fieldnames})
-                    writer.writerow({key: results_val[key] for key in writer.fieldnames})
+                    row = {'fold': fold_idx + 1, 'epoch': epoch + 1, 'phase': 'val', 'custom_loss': f"{avg_val_loss:.4f}", 'pearson_mean_cell_wise': f"{np.mean(pearson_val_corr):.4f}", 'spearman_mean_cell_wise':  f"{np.mean(spearman_val_corr):.4f}"}
+                    if results_val:
+                        for k in results_val:
+                            if k in writer.fieldnames:
+                                row[k] = results_val[k]
+                    writer.writerow(row)
 
-                val_losses.append(epoch_val_loss / len(val_dataloader))
+                val_losses.append(avg_val_loss)
+                scheduler.step(avg_val_loss)
 
-                scheduler.step(epoch_val_loss / len(val_dataloader))
-
-                # Log the current learning rate
                 current_lr = optimizer.param_groups[0]['lr']
                 logger.info(f"Learning rate for epoch {epoch + 1}: {current_lr}")
 
-                # Early stopping logic
-                if float(results_val['spearman_mean_cell_wise']) > float(best_spearman):
-                    best_spearman = results_val['spearman_mean_cell_wise']
+                # Early stopping based on spearman_mean_cell_wise if present
+                current_spearman = float(results_val.get('spearman_mean_genewise', np.mean(spearman_val_corr) if spearman_val_corr else -np.inf))
+                if current_spearman > best_spearman:
+                    best_spearman = current_spearman
                     patience_counter = 0
-                    torch.save(model.state_dict(), os.path.join(model_save_dir, "best_model.pth"))
-                    logger.info("Best model saved.")
+                    # Save best
+                    best_model_path = os.path.join(model_save_dir, f"fold_{fold_idx+1}", "best_model.pth")
+                    os.makedirs(os.path.dirname(best_model_path), exist_ok=True)
+                    torch.save(model.state_dict(), best_model_path)
+                    logger.info(f"Saved best model to {best_model_path}")
                 else:
                     patience_counter += 1
-                    logger.info(f"No improvement in validation loss. Patience counter: {patience_counter}/{patience}")
+                    logger.info(f"No improvement in spearman genewise. Patience: {patience_counter}/{patience}")
 
                 if patience_counter >= patience:
-                    logger.info("Early stopping triggered. Training stopped.")
+                    logger.info("Early stopping triggered. Breaking training loop.")
                     break
-      
-                # Plot losses
 
-                # print("train_losses :::::: ", type(train_losses))
-                # print("train_losses :::::: ", train_losses)
+                # plot losses
+                try:
+                    plt.figure(figsize=(8, 5))
+                    plt.plot(range(1, len(train_losses) + 1), train_losses, label="Training Loss", marker="o")
+                    plt.plot(range(1, len(val_losses) + 1), val_losses, label="Validation Loss", marker="o")
+                    plt.xlabel("Epoch")
+                    plt.ylabel("Loss")
+                    plt.title(f"Fold {fold_idx+1} Loss")
+                    plt.legend()
+                    plt.grid(True)
+                    graph_save_path = os.path.join(model_save_dir, f"fold_{fold_idx+1}", f"loss_plot_epoch.png")
+                    plt.savefig(graph_save_path)
+                    plt.close('all')  # Close all figures to prevent memory leaks
+                except Exception as e:
+                    logger.warning(f"Could not plot losses: {e}")
 
-                # train_losses = [loss.cpu().item() if isinstance(loss, torch.Tensor) else float(loss) for loss in train_losses]
-                # val_losses = [loss.cpu().item() if isinstance(loss, torch.Tensor) else float(loss) for loss in val_losses]
-                plt.figure(figsize=(10, 6))
-                plt.plot(range(1, len(train_losses) + 1), train_losses, label="Training Loss", marker="o")
-                plt.plot(range(1, len(val_losses) + 1), val_losses, label="Validation Loss", marker="o")
-                plt.xlabel("Epoch")
-                plt.ylabel("Loss")
-                plt.title("Training and Validation Loss")
-                plt.legend()
-                plt.grid()
-                graph_save_path = os.path.join(model_save_dir, "loss_plot.png")
-                plt.savefig(graph_save_path)
-                plt.close()
+            # Save snapshot per epoch
+            snapshot_path = os.path.join(model_save_dir, f"fold_{fold_idx+1}", f"epoch_model.pth")
+            os.makedirs(os.path.dirname(snapshot_path), exist_ok=True)
+            torch.save(model.state_dict(), snapshot_path)
 
-            torch.save(model.state_dict(), os.path.join(model_save_dir, f"{epoch+1}_regression_model.pth"))
+        del model, optimizer, scheduler, train_dataloader, val_dataloader
+        torch.cuda.empty_cache()
+        gc.collect()
+        return None
 
-        models["complete_model"] = model
+    if params["dataset_name"] == "cscc":
+        gsm_samples = [ 'GSM4284316_P2','GSM4284317_P2','GSM4284318_P2',
+                        'GSM4284319_P5','GSM4284320_P5','GSM4284321_P5',
+                        'GSM4284322_P9','GSM4284323_P9','GSM4284324_P9',
+                        'GSM4284325_P10','GSM4284326_P10','GSM4284327_P10']
+        
+    if params["dataset_name"] == "hist2st_845":
+        gsm_samples = [
+            '23209_C1', '23209_C2', '23209_D1', '23268_C1', '23268_C2', '23268_D1', '23269_C1', '23269_C2',
+            '23269_D1', '23270_D2', '23270_E1', '23270_E2', '23272_D2', '23272_E1', '23272_E2', '23277_D2',
+            '23277_E1', '23277_E2', '23287_C1', '23287_C2', '23287_D1', '23288_D2', '23288_E1', '23288_E2',
+            '23377_C1', '23377_C2', '23377_D1', '23450_D2', '23450_E1', '23450_E2', '23506_C1', '23506_C2',
+            '23506_D1', '23508_D2', '23508_E1', '23508_E2', '23567_D2', '23567_E1', '23567_E2', '23803_D2',
+            '23803_E1', '23803_E2', '23810_D2', '23810_E1', '23810_E2', '23895_C1', '23895_C2', '23895_D1',
+            '23901_C2', '23901_D1', '23903_C1', '23903_C2', '23903_D1', '23944_D2', '23944_E1', '23944_E2',
+            '24044_D2', '24044_E1', '24044_E2', '24105_C1', '24105_C2', '24105_D1', '24220_D2', '24220_E1',
+            '24220_E2', '24223_D2', '24223_E1', '24223_E2'
+        ]
 
-        return models
+    if params["dataset_name"] == "her2":
+        gsm_samples =  [
+            "A1", "A2", "A3", "A4", "A5", "A6",
+            "B1", "B2", "B3", "B4", "B5", "B6",
+            "C1", "C2", "C3", "C4", "C5", "C6",
+            "D1", "D2", "D3", "D4", "D5", "D6",
+            "E1", "E2", "E3",
+            "F1", "F2", "F3",
+            "G1", "G2", "G3",
+            "H1", "H2", "H3"
+        ]
+          
+    def get_patient_id(sample, dataset_name):
+        if dataset_name == "cscc":
+            # GSM4284316_P2 → P2
+            return sample.split("_")[1]
 
-    #Paths to your files
-    list_ST_name_data = ["UC1_NI", "UC1_I", "UC6_NI", "UC6_I", "UC7_I", "UC9_I", "DC5"]
-    # list_ST_name_data = ["UC1_NI"]
-    # if params["data"] == "Inflamed":
-    #     list_ST_name_data = ['UC1_I', 'UC6_I', 'UC7_I', 'UC9_I']
-    # elif params["data"] == "Non-Inflamed":
-    #     list_ST_name_data = ['UC1_NI', 'UC6_NI', 'DC5']
+        elif dataset_name == "hist2st_845":
+            # 23209_C1 → 23209
+            return sample.split("_")[0]
 
+        elif dataset_name == "her2":
+            # A1 → A
+            return sample[0]
 
-    train_paths = [
-        (
-            f"{params['label_path']}{folder}_train.h5ad",
-            f"{params['dataset_path']}{folder}_train_embeddings.h5",
+        else:
+            raise ValueError(f"Unknown dataset: {dataset_name}")
+           
+
+    # --- Define paths ---
+    dataset_path = params.get("dataset_path", "")
+
+    if params["dataset_name"] == "cscc":
+        patch_paths = [os.path.join(dataset_path, f"{sample}_patches.h5") for sample in gsm_samples]
+        adata_paths = [os.path.join(dataset_path, f"{sample}_spots.h5ad") for sample in gsm_samples]
+    if params["dataset_name"] == "her2":
+        patch_paths = [os.path.join(dataset_path, f"{sample}.h5") for sample in gsm_samples]
+        adata_paths = [os.path.join(dataset_path, f"{sample}.h5ad") for sample in gsm_samples]
+    if params["dataset_name"] == "hist2st_845":
+        patch_paths = [os.path.join(dataset_path, f"{sample}.h5") for sample in gsm_samples]
+        adata_paths = [os.path.join(dataset_path, f"{sample}.h5ad") for sample in gsm_samples]
+    logger.info(f"Total samples: {len(gsm_samples)}")
+    for p, a in zip(patch_paths, adata_paths):
+        logger.info(f"  - {os.path.basename(p)} ↔ {os.path.basename(a)}")
+
+    # --- Check file existence ---
+    for p, a in zip(patch_paths, adata_paths):
+        if not os.path.exists(p):
+            logger.warning(f"Missing patch file: {p}")
+        if not os.path.exists(a):
+            logger.warning(f"Missing spot file: {a}")
+
+    # --- Patient grouping (for leakage-free CV) ---
+    patient_ids = [get_patient_id(s, params["dataset_name"]) for s in gsm_samples]
+    unique_patients = sorted(set(patient_ids))
+
+    logger.info(f"Total patients: {len(unique_patients)} → {unique_patients}")
+
+    # --- Gene CSV file ---
+    genes_file = os.path.join(params['genes'], f"{params['dataset_name']}.npy")
+    print("+++++++++++++++++++++++++++++++",genes_file)
+    gene_names = np.load(genes_file, allow_pickle=True).tolist()
+    logger.info(f" Using gene list from: {gene_names}")
+    if not os.path.exists(genes_file):
+        # raise FileNotFoundError(f"Gene list not found: {genes_file}")
+        print(genes_file)
+        print(gene_names)
+
+    # --- Optional image transforms ---
+    from torchvision import transforms
+    transform = transforms.Compose([
+        transforms.ToPILImage(),
+        transforms.Resize((224, 224)),
+        transforms.ToTensor()
+    ])
+
+    # --- K-Fold setup ---
+    k = params.get("k_folds", 5)
+    n_patients = len(unique_patients)
+
+    if k > n_patients:
+        logger.warning(
+            f"k_folds ({k}) > number of patients ({n_patients}). "
+            f"Setting k = {n_patients}"
         )
-        for folder in list_ST_name_data
-    ]
+        k = n_patients
 
-    train_datasets = [SpatialGeneExpressionDataset(adata_path, embedding_file_path,output_dir= params['neighbors_path'] ,is_train=True, k_spatial_neighbors=params['k_spatial_neighbors'], k_gene_exp_neighbors=params['k_gene_exp_neighbors'], add_coords = params["add_coords"]) for  i, (adata_path, embedding_file_path) in enumerate(train_paths)]
-    train_datasets = ConcatDataset(train_datasets)
-    logger.info(f"Training Data size {len(train_datasets)}")
+    kf = GroupKFold(n_splits=k, shuffle=True, random_state=42)
+    fold_models = []
 
-    # val_paths = [
-    # (
-    #     f"{params['label_path']}{folder}_train.h5ad",
-    #     f"{params['label_path']}{folder}_test.h5ad",
-    #     f"{params['dataset_path']}{folder}_train_embeddings.h5",
-    #     f"{params['dataset_path']}{folder}_test_embeddings.h5"
-    # )
-    # for folder in list_ST_name_data
-    # ]
+    # --- K-Fold Loop ---
+    for fold_idx, (train_idx, val_idx) in enumerate(kf.split(gsm_samples, groups=patient_ids)):
+        logger.info(f"\n===== Starting Fold {fold_idx+1}/{k} =====")
+        
+        train_patients = sorted(set(patient_ids[i] for i in train_idx))
+        val_patients   = sorted(set(patient_ids[i] for i in val_idx))
 
+        logger.info(f"Train patients: {len(train_patients)}, {train_patients}")
+        logger.info(f"Val patients: {len(val_patients)},  {val_patients}")
 
-    # os.makedirs(params['neighbors_path'], exist_ok=True)
+        train_patch_files = [patch_paths[i] for i in train_idx]
+        train_adata_files = [adata_paths[i] for i in train_idx]
+        val_patch_files   = [patch_paths[i] for i in val_idx]
+        val_adata_files   = [adata_paths[i] for i in val_idx]
 
-    # val_datasets = [SpatialGeneExpressionDatasetValidationBased(adata_path = adata_path_train, adata_path_val = adata_path_val, embedding_file_path_train = embedding_path_train, embedding_file_path_val = embedding_path_test,
-    # output_dir= params['neighbors_path_val'] , k_spatial_neighbors=params['k_spatial_neighbors'], k_gene_exp_neighbors=params['k_gene_exp_neighbors']) for  i, (adata_path_train, adata_path_val, embedding_path_train, embedding_path_test) in enumerate(val_paths)]
-    # val_datasets = ConcatDataset(val_datasets)
-    # print(f"Validation Data size {len(val_datasets)}")
+        logger.info(f"Fold {fold_idx+1}: Train={len(train_patch_files)}, Val={len(val_patch_files)}")
+        train_datasets_list = [
+            PatchDataset(
+                gene_path=adata_p,
+                img_path=img_p,
+                gene_names=gene_names,
+                transform=transform,
+                log_norm=True,
+                scale_factor=params.get("scale_factor", 1000000)
+            )
+            for adata_p, img_p in zip(train_adata_files, train_patch_files)
+        ]
 
+        val_datasets_list = [
+            PatchDataset(
+                gene_path=adata_p,
+                img_path=img_p,
+                gene_names=gene_names,
+                transform=transform,
+                log_norm=True,
+                scale_factor=params.get("scale_factor", 1000000)
+            )
+            for adata_p, img_p in zip(val_adata_files, val_patch_files)
+        ]
 
-    val_paths = [
-        (
-            f"{params['label_path']}{folder}_test.h5ad",
-            f"{params['dataset_path']}{folder}_test_embeddings.h5",
+        # --- Combine datasets ---
+
+        train_dataset_concat = ConcatDataset(train_datasets_list)
+        val_dataset_concat   = ConcatDataset(val_datasets_list)
+
+        logger.info(f"Fold {fold_idx+1}: Train={len(train_dataset_concat)}, Val={len(val_dataset_concat)}")
+
+        # --- Create fold directory ---
+        fold_dir = os.path.join(model_save_dir, f"fold_{fold_idx+1}")
+        os.makedirs(fold_dir, exist_ok=True)
+
+        # --- Train model for this fold ---
+        models = train_regression(
+            train_dataset_concat,
+            val_dataset_concat,
+            fold_idx,
+            learning_rate=params["learning_rate"],
+            epochs=params["epochs"],
+            batch_size=params["batch_size"]
         )
-        for folder in list_ST_name_data
-    ]
 
-    # val_datasets = [SpatialGeneExpressionDataset(adata_path, embedding_file_path, output_dir= params['neighbors_path'] ,is_train=False, k_spatial_neighbors=params['k_spatial_neighbors'], k_gene_exp_neighbors=params['k_gene_exp_neighbors'], add_coords = params["add_coords"]) for  i, (adata_path, embedding_file_path) in enumerate(val_paths)]
-    val_datasets = [SpatialGeneExpressionDataset(adata_path, embedding_file_path, output_dir= params['neighbors_path'] ,is_train=False, k_spatial_neighbors=params['k_spatial_neighbors'], k_gene_exp_neighbors=params["val_k_gene_exp_neighbors"], add_coords = params["add_coords"]) for  i, (adata_path, embedding_file_path) in enumerate(val_paths)]
-    val_datasets = ConcatDataset(val_datasets)
+        del train_dataset_concat, train_datasets_list
+        del val_dataset_concat, val_datasets_list
 
+        torch.cuda.empty_cache()
+        gc.collect()
+        
+        logger.info(f"===== Completed Fold {fold_idx+1}/{k} =====")
+                                
+    # --- Save summary ---
+    summary_file = os.path.join(model_save_dir, "folds_summary.txt")
+    with open(summary_file, "w") as sf:
+        sf.write(f"Completed {k} folds. Models saved in {model_save_dir}\n")
 
-    logger.info(f"Validation Data size {len(val_datasets)}")
-
-
-    models = train_regression_with_custom_loss(train_datasets,val_datasets, k_spatial_neighbors=params['k_spatial_neighbors'], k_gene_exp_neighbors=params['k_gene_exp_neighbors'], batch_size=params['batch_size'])
+    logger.info("All folds completed successfully.")
 
 
 if __name__ == "__main__":
-    main()
+    main()                               

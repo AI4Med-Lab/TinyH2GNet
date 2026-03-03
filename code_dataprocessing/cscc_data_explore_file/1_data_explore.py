@@ -11,7 +11,7 @@ import numpy as np
 Image.MAX_IMAGE_PIXELS = None
 
 # ------------------------------------------------------------
-# 1️⃣ Command-line arguments
+#  Command-line arguments
 # ------------------------------------------------------------
 parser = argparse.ArgumentParser(description="Compute neighbor distances and save per-sample patch recommendations")
 parser.add_argument("--base_dir", required=True, help="Base directory containing GSM files")
@@ -23,7 +23,7 @@ args = parser.parse_args()
 os.makedirs(args.out_dir, exist_ok=True)
 
 # ------------------------------------------------------------
-# 2️⃣ Helper functions
+# Helper functions
 # ------------------------------------------------------------
 def load_tsv(tsv_path):
     """Load gzipped TSV file"""
@@ -42,7 +42,7 @@ def compute_neighbor_distances(coords, n_neighbors=5):
     return distances[:, 1:]  # skip self-distance (0)
 
 # ------------------------------------------------------------
-# 3️⃣ Explore folder
+# Explore folder
 # ------------------------------------------------------------
 all_files = sorted([f for f in os.listdir(args.base_dir) if f.endswith(".gz")])
 sample_ids = sorted(set([f.split("_")[0] for f in all_files]))
