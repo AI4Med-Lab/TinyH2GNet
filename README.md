@@ -4,7 +4,7 @@ Predicting spatial gene expression from histopathology images using convolutiona
 
 ## Overview
 
-Spatial Transcriptomics (ST) enables measurement of gene expression with spatial context but remains costly and resource-intensive. This project investigates whether compact deep learning models can achieve competitive performance for image-based spatial gene expression prediction.
+Spatial Transcriptomics (ST) enables measurement of gene expression with spatial context but remains costly and resource-intensive. This project finds whether compact deep learning models can achieve competitive performance for image-based spatial gene expression prediction.
 
 ## Datasets
 
