@@ -115,6 +115,61 @@ All models are implemented in:
 - Python 3.10
 - PyTorch
 
+### Installation
+
+Clone Repository
+
+```
+git clone https://github.com/AI4Med-Lab/TinyH2GNet.git
+cd TinyH2GNet
+```
+
+Create Environment
+
+```
+conda create -n img2gene python=3.10
+conda activate img2gene
+```
+
+Install PyTorch
+
+```
+conda install pytorch==2.6.0 torchvision torchaudio pytorch-cuda=12.6 -c pytorch -c nvidia
+```
+
+Install Torchsort
+
+```
+pip install https://github.com/teddykoker/torchsort/releases/download/v0.1.10/torchsort-0.1.10+pt26cu126-cp310-cp310-linux_x86_64.whl
+```
+
+Alternative installation from source:
+
+```
+pip install git+https://github.com/teddykoker/torchsort.git
+```
+
+Install Remaining Dependencies
+
+```
+pip install -r requirements.txt
+```
+
+Verify Installation
+
+```
+python --version
+python -c "import torch; print(torch.__version__)"
+python -c "import torchsort; print('Torchsort installed successfully')"
+```
+
+Expected versions:
+
+```
+Python 3.10.x
+PyTorch 2.6.0+cu126
+```
+
 ## Running the Code
 
 ### Training
